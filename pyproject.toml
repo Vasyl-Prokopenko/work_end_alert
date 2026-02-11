@@ -1,7 +1,7 @@
 [project]
 name = "work-end-alert"
 version = "0.1.0"
-description = "Add your description here"
+description = "Forceful work-life balance enforcer for Windows. Monitors usage via ActivityWatch and blocks screen when daily limit is reached."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
