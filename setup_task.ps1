@@ -44,7 +44,7 @@ if (-not (Test-Path $PythonW)) {
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 $Action = New-ScheduledTaskAction -Execute $PythonW -Argument "`"$ScriptPath`" --target $TargetMinutes --snooze-options `"$SnoozeOptions`"" -WorkingDirectory $PSScriptRoot
 $Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes $CheckIntervalMinutes)
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes $CheckIntervalMinutes) -MultipleInstances Parallel
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes $CheckIntervalMinutes) -MultipleInstances Parallel
 Register-ScheduledTask -Action $Action -Trigger $Trigger -Settings $Settings -TaskName $TaskName -Description "Checks ActivityWatch for >8h active work time." -Force | Out-Null
 
 Write-Host "Task '$TaskName' registered successfully."
