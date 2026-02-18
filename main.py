@@ -10,41 +10,50 @@ from aw_client import ActivityWatchClient
 from screeninfo import get_monitors
 
 
+def _find_bucket(all_buckets, exact_id, keyword):
+    """Find a bucket by exact ID, falling back to keyword search."""
+    if exact_id in all_buckets:
+        return exact_id
+    matches = [b for b in all_buckets if keyword in b]
+    return matches[0] if matches else None
+
+
 def get_active_time_today():
+    """Calculate today's active work time using the ActivityWatch query API.
+
+    Uses the same approach as the ActivityWatch web UI:
+    - flood() fills small gaps between consecutive events
+    """
     try:
         client_name = "work-end-alert"
         aw = ActivityWatchClient(client_name, testing=False)
 
-        # Calculate time range for today (local time)
         now = datetime.now().astimezone()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        timeperiods = [(today_start, now)]
 
-        # 1. Find the AFK bucket
-        # The bucket name is usually formatted as "aw-watcher-afk_{hostname}"
         hostname = socket.gethostname()
-        bucket_id = f"aw-watcher-afk_{hostname}"
-
-        # Verify bucket exists, fallback to searching if strict match fails
         all_buckets = aw.get_buckets()
-        if bucket_id not in all_buckets:
-            # Try to find any bucket with 'aw-watcher-afk' in the name
-            afk_buckets = [b for b in all_buckets if "aw-watcher-afk" in b]
-            if not afk_buckets:
-                print("Error: Could not find 'aw-watcher-afk' bucket.")
-                return 0
-            bucket_id = afk_buckets[0]
 
-        # 2. Get events form today
-        events = aw.get_events(bucket_id, start=today_start, end=now)
+        afk_bucket_id = _find_bucket(
+            all_buckets, f"aw-watcher-afk_{hostname}", "aw-watcher-afk"
+        )
+        if not afk_bucket_id:
+            print("Error: Could not find 'aw-watcher-afk' bucket.")
+            return 0
 
-        # 3. Calculate "not-afk" duration
-        active_seconds = 0
-        for event in events:
-            if event.data.get("status") == "not-afk":
-                # Event duration is in seconds (float or int)
-                active_seconds += event.duration.total_seconds()
-
+        # Use the AW query API with flood() to match the UI behaviour.
+        # flood() extends each event to fill the gap until the next event,
+        # which correctly accounts for small untracked gaps between events.
+        query = (
+            f'afk_events = flood(query_bucket(find_bucket("{afk_bucket_id}")));'
+            f'not_afk = filter_keyvals(afk_events, "status", ["not-afk"]);'
+            f'RETURN = {{"events": not_afk}};'
+        )
+        result = aw.query(query, timeperiods)
+        active_seconds = sum(e["duration"] for e in result[0]["events"])
         return active_seconds
+
     except Exception as e:
         print(f"Error querying ActivityWatch: {e}")
         return 0
