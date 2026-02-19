@@ -23,10 +23,25 @@ def get_active_time_today():
 
     Uses the same approach as the ActivityWatch web UI:
     - flood() fills small gaps between consecutive events
+    - Reads the "always_active_pattern" setting from ActivityWatch so that
+      time in matching apps/titles counts as active even during AFK.
     """
     try:
         client_name = "work-end-alert"
         aw = ActivityWatchClient(client_name, testing=False)
+
+        # Read the "always count as active" pattern from AW settings
+        # (the same value configured in the AW web-UI).
+        try:
+            settings = aw.get_setting()
+            always_active_pattern = settings.get("always_active_pattern", "")
+        except Exception:
+            always_active_pattern = ""
+
+        if always_active_pattern:
+            print(f"Always-active pattern: {always_active_pattern}")
+        else:
+            print("No always-active pattern configured in ActivityWatch.")
 
         now = datetime.now().astimezone()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -38,20 +53,46 @@ def get_active_time_today():
         afk_bucket_id = _find_bucket(
             all_buckets, f"aw-watcher-afk_{hostname}", "aw-watcher-afk"
         )
+        window_bucket_id = _find_bucket(
+            all_buckets,
+            f"aw-watcher-window_{hostname}",
+            "aw-watcher-window",
+        )
         if not afk_bucket_id:
             print("Error: Could not find 'aw-watcher-afk' bucket.")
             return 0
+        if not window_bucket_id:
+            print("Error: Could not find 'aw-watcher-window' bucket.")
+            return 0
 
-        # Use the AW query API with flood() to match the UI behaviour.
-        # flood() extends each event to fill the gap until the next event,
-        # which correctly accounts for small untracked gaps between events.
+        # Build query matching the AW web-UI approach exactly:
+        # 1. Flood window & afk events
+        # 2. Filter not-afk periods
+        # 3. Union with always-active-pattern matches (period_union)
+        # 4. Intersect window events with active periods
+        # 5. Sum the intersected window event durations
         query = (
-            f'afk_events = flood(query_bucket(find_bucket("{afk_bucket_id}")));'
-            f'not_afk = filter_keyvals(afk_events, "status", ["not-afk"]);'
-            f'RETURN = {{"events": not_afk}};'
+            f'events = flood(query_bucket(find_bucket("{window_bucket_id}")));'
+            f'not_afk = flood(query_bucket(find_bucket("{afk_bucket_id}")));'
+            f'not_afk = filter_keyvals(not_afk, "status", ["not-afk"]);'
+        )
+
+        if always_active_pattern:
+            escaped = always_active_pattern.replace('"', '\\"')
+            query += (
+                f'not_treat_as_afk = filter_keyvals_regex(events, "app", "{escaped}");'
+                f'not_afk = period_union(not_afk, not_treat_as_afk);'
+                f'not_treat_as_afk = filter_keyvals_regex(events, "title", "{escaped}");'
+                f'not_afk = period_union(not_afk, not_treat_as_afk);'
+            )
+
+        query += (
+            'events = filter_period_intersect(events, not_afk);'
+            'duration = sum_durations(events);'
+            'RETURN = {"duration": duration};'
         )
         result = aw.query(query, timeperiods)
-        active_seconds = sum(e["duration"] for e in result[0]["events"])
+        active_seconds = result[0]["duration"]
         return active_seconds
 
     except Exception as e:
