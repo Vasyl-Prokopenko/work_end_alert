@@ -1,12 +1,13 @@
 import argparse
+import json
 import os
 import socket
 import tempfile
 import time
 import tkinter as tk
+import urllib.request
 from datetime import datetime
 
-from aw_client import ActivityWatchClient
 from screeninfo import get_monitors
 
 
@@ -26,14 +27,26 @@ def get_active_time_today():
     - Reads the "always_active_pattern" setting from ActivityWatch so that
       time in matching apps/titles counts as active even during AFK.
     """
-    try:
-        client_name = "work-end-alert"
-        aw = ActivityWatchClient(client_name, testing=False)
+    base_url = "http://localhost:5600/api/0"
 
+    def aw_get(path):
+        req = urllib.request.Request(f"{base_url}{path}")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    def aw_post(path, data):
+        body = json.dumps(data).encode()
+        req = urllib.request.Request(
+            f"{base_url}{path}", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+
+    try:
         # Read the "always count as active" pattern from AW settings
-        # (the same value configured in the AW web-UI).
         try:
-            settings = aw.get_setting()
+            settings = aw_get("/settings")
             always_active_pattern = settings.get("always_active_pattern", "")
         except Exception:
             always_active_pattern = ""
@@ -45,10 +58,9 @@ def get_active_time_today():
 
         now = datetime.now().astimezone()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        timeperiods = [(today_start, now)]
 
         hostname = socket.gethostname()
-        all_buckets = aw.get_buckets()
+        all_buckets = aw_get("/buckets/")
 
         afk_bucket_id = _find_bucket(
             all_buckets, f"aw-watcher-afk_{hostname}", "aw-watcher-afk"
@@ -65,12 +77,7 @@ def get_active_time_today():
             print("Error: Could not find 'aw-watcher-window' bucket.")
             return 0
 
-        # Build query matching the AW web-UI approach exactly:
-        # 1. Flood window & afk events
-        # 2. Filter not-afk periods
-        # 3. Union with always-active-pattern matches (period_union)
-        # 4. Intersect window events with active periods
-        # 5. Sum the intersected window event durations
+        # Build query matching the AW web-UI approach exactly
         query = (
             f'events = flood(query_bucket(find_bucket("{window_bucket_id}")));'
             f'not_afk = flood(query_bucket(find_bucket("{afk_bucket_id}")));'
@@ -91,7 +98,11 @@ def get_active_time_today():
             'duration = sum_durations(events);'
             'RETURN = {"duration": duration};'
         )
-        result = aw.query(query, timeperiods)
+
+        timeperiods = [
+            f"{today_start.isoformat()}/{now.isoformat()}"
+        ]
+        result = aw_post("/query/", {"query": [query], "timeperiods": timeperiods})
         active_seconds = result[0]["duration"]
         return active_seconds
 
