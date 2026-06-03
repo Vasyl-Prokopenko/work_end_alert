@@ -45,16 +45,27 @@ if (-not (Test-Path $PythonW)) {
 # uv generates pythonw.exe as a console trampoline (identical to python.exe),
 # so it still pops up a console window. Replace it with the base interpreter's
 # real GUI pythonw.exe, which correctly resolves this venv via pyvenv.cfg.
+#
+# The base pythonw.exe is the real interpreter (not a trampoline), so it loads
+# python3*.dll from its own directory. After copying it into .venv\Scripts we
+# must also copy those DLLs next to it, otherwise it fails to start with
+# 0xC0000135 (STATUS_DLL_NOT_FOUND) and the scheduled task silently aborts.
+$ScriptsDir = Join-Path $PSScriptRoot ".venv\Scripts"
 $PyVenvCfg = Join-Path $PSScriptRoot ".venv\pyvenv.cfg"
 $HomeLine = (Get-Content $PyVenvCfg | Select-String '^home = ').Line
 if ($HomeLine) {
     $BaseDir = ($HomeLine -replace '^home = ', '').Trim()
     $BasePythonW = Join-Path $BaseDir "pythonw.exe"
-    $Python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+    $Python = Join-Path $ScriptsDir "python.exe"
     $SameTrampoline = (Test-Path $Python) -and ((Get-FileHash $Python).Hash -eq (Get-FileHash $PythonW).Hash)
     if ($SameTrampoline -and (Test-Path $BasePythonW)) {
         Write-Host "Patching pythonw.exe (uv #19226 workaround)..."
         Copy-Item $BasePythonW $PythonW -Force
+        # Copy the interpreter DLLs (python3.dll, python3XX.dll) that the real
+        # pythonw.exe needs to load, since they live in the base interpreter dir.
+        Get-ChildItem (Join-Path $BaseDir "python3*.dll") -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName $ScriptsDir -Force
+        }
     }
 }
 
