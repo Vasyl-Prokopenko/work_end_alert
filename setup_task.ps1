@@ -41,6 +41,23 @@ if (-not (Test-Path $PythonW)) {
     exit 1
 }
 
+# Workaround for uv bug https://github.com/astral-sh/uv/issues/19226 :
+# uv generates pythonw.exe as a console trampoline (identical to python.exe),
+# so it still pops up a console window. Replace it with the base interpreter's
+# real GUI pythonw.exe, which correctly resolves this venv via pyvenv.cfg.
+$PyVenvCfg = Join-Path $PSScriptRoot ".venv\pyvenv.cfg"
+$HomeLine = (Get-Content $PyVenvCfg | Select-String '^home = ').Line
+if ($HomeLine) {
+    $BaseDir = ($HomeLine -replace '^home = ', '').Trim()
+    $BasePythonW = Join-Path $BaseDir "pythonw.exe"
+    $Python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+    $SameTrampoline = (Test-Path $Python) -and ((Get-FileHash $Python).Hash -eq (Get-FileHash $PythonW).Hash)
+    if ($SameTrampoline -and (Test-Path $BasePythonW)) {
+        Write-Host "Patching pythonw.exe (uv #19226 workaround)..."
+        Copy-Item $BasePythonW $PythonW -Force
+    }
+}
+
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 $Action = New-ScheduledTaskAction -Execute $PythonW -Argument "`"$ScriptPath`" --target $TargetMinutes --snooze-options `"$SnoozeOptions`"" -WorkingDirectory $PSScriptRoot
 $Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes $CheckIntervalMinutes)
